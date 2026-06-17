@@ -1,7 +1,24 @@
 import mongoose from "mongoose";
 
+const isIndexConflict = (err) =>
+  err?.code === 86 || err?.codeName === "IndexKeySpecsConflict";
+
 export const ensureIndexes = async (model) => {
-  await model.syncIndexes();
+  try {
+    await model.syncIndexes();
+  } catch (err) {
+    if (!isIndexConflict(err)) {
+      throw err;
+    }
+
+    const existing = await model.collection.indexes();
+    for (const idx of existing) {
+      if (idx.name === "_id_") continue;
+      await model.collection.dropIndex(idx.name).catch(() => {});
+    }
+
+    await model.syncIndexes();
+  }
 };
 
 export const resolveUserFromLegacyId = async (User, legacyId, type) => {
