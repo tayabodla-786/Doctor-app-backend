@@ -1,4 +1,6 @@
-import { RtcTokenBuilder, RtcRole } from "agora-token";
+import agoraToken from "agora-token";
+
+const { RtcTokenBuilder, RtcRole } = agoraToken;
 
 export const toAgoraUid = (userId) => {
   const hex = userId.toString().slice(-8);
@@ -15,8 +17,6 @@ export const buildAgoraToken = (channelName, userId, role = RtcRole.PUBLISHER) =
 
   const uid = toAgoraUid(userId);
   const expireSeconds = Number(process.env.AGORA_TOKEN_EXPIRE || 3600);
-  const now = Math.floor(Date.now() / 1000);
-  const expireAt = now + expireSeconds;
 
   const token = RtcTokenBuilder.buildTokenWithUid(
     appId,
@@ -24,9 +24,15 @@ export const buildAgoraToken = (channelName, userId, role = RtcRole.PUBLISHER) =
     channelName,
     uid,
     role,
-    expireAt,
-    expireAt
+    expireSeconds,
+    expireSeconds
   );
 
-  return { token, uid, appId, channelName, expireAt };
+  return {
+    token,
+    uid,
+    appId,
+    channelName,
+    expireAt: Math.floor(Date.now() / 1000) + expireSeconds,
+  };
 };
