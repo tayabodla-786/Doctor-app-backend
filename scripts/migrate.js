@@ -1,8 +1,8 @@
-import "dotenv/config";
 import mongoose from "mongoose";
 import { readdir } from "fs/promises";
 import path from "path";
 import { fileURLToPath } from "url";
+import { getMongoUri } from "../config/env.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const migrationsDir = path.join(__dirname, "..", "migrations");
@@ -33,10 +33,7 @@ const loadMigrations = async () => {
 };
 
 const connect = async () => {
-  if (!process.env.MONGODB_URL) {
-    throw new Error("MONGODB_URL is required in .env");
-  }
-  await mongoose.connect(process.env.MONGODB_URL);
+  await mongoose.connect(getMongoUri());
 };
 
 const runUp = async () => {
