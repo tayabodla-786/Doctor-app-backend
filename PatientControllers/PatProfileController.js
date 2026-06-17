@@ -1,18 +1,19 @@
 import PatProfile from "../models/PatProfile.js";
-import PatAuth from "../models/PatAuth.js";
+import { getAuthUserId, getLegacyPatientId } from "../utils/userHelpers.js";
 
-// Save or update patient profile
 export const savePatientProfile = async (req, res) => {
   try {
-    const patientId = req.user.id;
+    const userId = getAuthUserId(req.user);
+    const legacyPatientId = await getLegacyPatientId(req.user);
     const { phone, address, age, gender, bloodGroup, medicalNotes } = req.body;
 
-    const patient = await PatAuth.findById(patientId).select("name email");
-    if (!patient) {
-      return res.status(404).json({ success: false, message: "Patient not found" });
+    let profile = await PatProfile.findOne({ user: userId });
+
+    if (!profile && legacyPatientId) {
+      profile = await PatProfile.findOne({ patient: legacyPatientId });
+      if (profile && !profile.user) profile.user = userId;
     }
 
-    let profile = await PatProfile.findOne({ patient: patientId });
     if (profile) {
       profile.phone = phone || profile.phone;
       profile.address = address || profile.address;
@@ -20,18 +21,20 @@ export const savePatientProfile = async (req, res) => {
       profile.gender = gender || profile.gender;
       profile.bloodGroup = bloodGroup || profile.bloodGroup;
       profile.medicalNotes = medicalNotes || profile.medicalNotes;
+      if (!profile.user) profile.user = userId;
       await profile.save();
       return res.status(200).json({ success: true, message: "Profile updated", profile });
     }
 
     profile = new PatProfile({
-      patient: patientId,
+      user: userId,
+      patient: legacyPatientId,
       phone,
       address,
       age,
       gender,
       bloodGroup,
-      medicalNotes
+      medicalNotes,
     });
     await profile.save();
     res.status(201).json({ success: true, message: "Profile created", profile });
@@ -40,15 +43,21 @@ export const savePatientProfile = async (req, res) => {
   }
 };
 
-// Get current patient profile
 export const getPatientProfile = async (req, res) => {
   try {
-    const patientId = req.user.id;
-    const patient = await PatAuth.findById(patientId).select("name email isVerified");
-    if (!patient) return res.status(404).json({ success: false, message: "Patient not found" });
+    const userId = getAuthUserId(req.user);
 
-    const profile = await PatProfile.findOne({ patient: patientId });
-    res.status(200).json({ success: true, patient, profile });
+    const userInfo = {
+      id: userId,
+      name: req.user.name,
+      email: req.user.email,
+      isVerified: req.user.isVerified,
+      role: req.user.role,
+      permissions: req.user.permissions,
+    };
+
+    const profile = await PatProfile.findOne({ user: userId });
+    res.status(200).json({ success: true, patient: userInfo, profile });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

@@ -15,9 +15,6 @@ export const submitDoctorVerification = async (req, res) => {
     const doctorId = req.user.id;
     const files = req.files;
 
-    console.log('Files received:', files);
-    console.log('Doctor ID:', doctorId);
-
     // Verify user has doctor role
     if (req.user.role !== "Doctor") {
       return res.status(403).json({
@@ -35,9 +32,10 @@ export const submitDoctorVerification = async (req, res) => {
     }
 
     const verificationData = {
-      doctor: doctorId,
+      user: doctorId,
+      doctor: req.user.legacyDoctorId || null,
       status: "Pending",
-      submittedAt: Date.now()
+      submittedAt: Date.now(),
     };
 
     // Degree Certificate
@@ -71,7 +69,7 @@ export const submitDoctorVerification = async (req, res) => {
     }
 
     const verification = await DocVerification.findOneAndUpdate(
-      { doctor: doctorId },
+      { user: doctorId },
       verificationData,
       { upsert: true, new: true }
     );
@@ -98,7 +96,7 @@ export const getDoctorVerificationStatus = async (req, res) => {
     }
 
     const doctorId = req.user.id;
-    const verification = await DocVerification.findOne({ doctor: doctorId }).populate('doctor', 'name email');
+    const verification = await DocVerification.findOne({ user: doctorId }).populate("user", "name email");
 
     if (!verification) {
       return res.status(404).json({ success: false, message: "No verification data found" });

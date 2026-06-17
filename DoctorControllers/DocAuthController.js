@@ -1,8 +1,11 @@
 import DocAuth from "../models/DocAuth.js";
+import User from "../models/User.js";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import nodemailer from "nodemailer";
 import { normalizeSpecialty } from "../utils/specialties.js";
+import { syncUserFromLegacy } from "../utils/userHelpers.js";
+import { getPermissionsForRole } from "../constants/roles.js";
 
 
 
@@ -76,6 +79,19 @@ export const registerDoctor = async (req, res) => {
 
     await newDoctor.save();
 
+    await syncUserFromLegacy({
+      name,
+      email,
+      password: hashedPassword,
+      role: "Doctor",
+      specialty: normalizedSpecialty,
+      otp,
+      otpExpires: newDoctor.otpExpires,
+      isVerified: false,
+      legacyId: newDoctor._id,
+      legacyField: "legacyDoctorId",
+    });
+
     // Send OTP to email
     await sendOTPEmail(email, otp);
 
@@ -119,6 +135,11 @@ export const verifyDoctorOTP = async (req, res) => {
     doctor.otpExpires = undefined;
     await doctor.save();
 
+    await User.findOneAndUpdate(
+      { email },
+      { $set: { isVerified: true, otp: undefined, otpExpires: undefined } }
+    );
+
     res.status(200).json({
       success: true,
       message: "Account verified successfully! You can now login."
@@ -148,9 +169,12 @@ export const loginDoctor = async (req, res) => {
       return res.status(400).json({ success: false, message: "Invalid credentials" });
     }
 
-    // Generate JWT Token
+    const user = await User.findOne({ email: doctor.email });
+    const tokenId = user?._id || doctor._id;
+    const permissions = getPermissionsForRole(doctor.role);
+
     const token = jwt.sign(
-      { id: doctor._id, role: doctor.role },
+      { id: tokenId, role: doctor.role, permissions },
       process.env.JWT_SECRET,
       { expiresIn: "7d" }
     );
@@ -160,11 +184,12 @@ export const loginDoctor = async (req, res) => {
       message: "Login successful",
       token,
       doctor: {
-        id: doctor._id,
+        id: tokenId,
         name: doctor.name,
         email: doctor.email,
         role: doctor.role,
-        specialty: doctor.specialty
+        specialty: doctor.specialty,
+        permissions,
       }
     });
 
@@ -198,7 +223,8 @@ export const forgotPasswordDoctor = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      message: "Password reset link sent to your email"
+      message: "Password reset link sent to your email",
+      resetToken,
     });
 
   } catch (error) {
@@ -226,6 +252,7 @@ export const resetPasswordDoctor = async (req, res) => {
     doctor.resetPasswordExpire = undefined;
 
     await doctor.save();
+    await User.updateOne({ email: doctor.email }, { $set: { password: doctor.password } });
 
     res.status(200).json({
       success: true,

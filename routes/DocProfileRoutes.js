@@ -5,7 +5,8 @@ import {
 } from "../DoctorControllers/DocProfileController.js";
 import { loginDoctor } from "../DoctorControllers/DocAuthController.js";
 
-import { protect } from "../middleware/authMiddleware.js";
+import { protectDoctor, authorize } from "../middleware/authMiddleware.js";
+import { PERMISSIONS } from "../constants/roles.js";
 
 const router = express.Router();
 
@@ -13,7 +14,7 @@ const router = express.Router();
 router.post("/login", loginDoctor);
 
 // Protected Routes (Doctor must be logged in)
-router.post("/save", protect, saveDoctorProfile);
-router.get("/me", protect, getDoctorProfile);
+router.post("/save", protectDoctor, authorize(PERMISSIONS.PROFILE_WRITE), saveDoctorProfile);
+router.get("/me", protectDoctor, authorize(PERMISSIONS.PROFILE_READ), getDoctorProfile);
 
 export default router;

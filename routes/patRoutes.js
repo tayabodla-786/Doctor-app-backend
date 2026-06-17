@@ -6,7 +6,7 @@ import {
   forgotPasswordPatient,
   resetPasswordPatient 
 } from "../PatientControllers/PatAuthController.js";
-import { getDoctorsBySpecialty, getAllSpecialties } from "../DoctorControllers/doctorController.js";
+import { getDoctorsBySpecialty, getAllSpecialties, getAllVerifiedDoctors, getDoctorById } from "../DoctorControllers/doctorController.js";
 import { protectPatient } from "../middleware/authMiddleware.js";
 
 const router = express.Router();
@@ -20,6 +20,8 @@ router.post("/reset-password", resetPasswordPatient);
 
 // Patient browses doctors by specialty (requires patient login)
 router.get("/specialties", protectPatient, getAllSpecialties);
+router.get("/doctors", protectPatient, getAllVerifiedDoctors);
+router.get("/doctor/:doctorId", protectPatient, getDoctorById);
 router.get("/doctors/:specialty", protectPatient, getDoctorsBySpecialty);
 
 export default router;

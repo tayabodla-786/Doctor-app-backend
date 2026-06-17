@@ -1,0 +1,43 @@
+export const ROLES = {
+  DOCTOR: "Doctor",
+  PATIENT: "Patient",
+  ADMIN: "Admin",
+};
+
+export const PERMISSIONS = {
+  PROFILE_READ: "profile:read",
+  PROFILE_WRITE: "profile:write",
+  APPOINTMENT_READ: "appointment:read",
+  APPOINTMENT_WRITE: "appointment:write",
+  MESSAGE_READ: "message:read",
+  MESSAGE_WRITE: "message:write",
+  DOCTOR_BROWSE: "doctor:browse",
+  VERIFICATION_READ: "verification:read",
+  VERIFICATION_WRITE: "verification:write",
+  ADMIN_MANAGE: "admin:manage",
+};
+
+export const ROLE_PERMISSIONS = {
+  [ROLES.DOCTOR]: [
+    PERMISSIONS.PROFILE_READ,
+    PERMISSIONS.PROFILE_WRITE,
+    PERMISSIONS.APPOINTMENT_READ,
+    PERMISSIONS.APPOINTMENT_WRITE,
+    PERMISSIONS.MESSAGE_READ,
+    PERMISSIONS.MESSAGE_WRITE,
+    PERMISSIONS.VERIFICATION_READ,
+    PERMISSIONS.VERIFICATION_WRITE,
+  ],
+  [ROLES.PATIENT]: [
+    PERMISSIONS.PROFILE_READ,
+    PERMISSIONS.PROFILE_WRITE,
+    PERMISSIONS.APPOINTMENT_READ,
+    PERMISSIONS.APPOINTMENT_WRITE,
+    PERMISSIONS.MESSAGE_READ,
+    PERMISSIONS.MESSAGE_WRITE,
+    PERMISSIONS.DOCTOR_BROWSE,
+  ],
+  [ROLES.ADMIN]: Object.values(PERMISSIONS),
+};
+
+export const getPermissionsForRole = (role) => ROLE_PERMISSIONS[role] || [];

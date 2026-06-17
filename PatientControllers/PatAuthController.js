@@ -1,7 +1,10 @@
 import PatAuth from "../models/PatAuth.js";
+import User from "../models/User.js";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import nodemailer from "nodemailer";
+import { syncUserFromLegacy } from "../utils/userHelpers.js";
+import { getPermissionsForRole } from "../constants/roles.js";
 
 // ====================== SEND OTP EMAIL ======================
 const sendOTPEmail = async (email, otp) => {
@@ -85,6 +88,18 @@ export const registerPatient = async (req, res) => {
 
     await newPatient.save();
 
+    await syncUserFromLegacy({
+      name,
+      email,
+      password: hashedPassword,
+      role: "Patient",
+      otp,
+      otpExpires: newPatient.otpExpires,
+      isVerified: false,
+      legacyId: newPatient._id,
+      legacyField: "legacyPatientId",
+    });
+
     // Send OTP
     const info = await sendOTPEmail(email, otp);
 
@@ -164,6 +179,11 @@ export const verifyPatientOTP = async (req, res) => {
     patient.otpExpires = undefined;
     await patient.save();
 
+    await User.findOneAndUpdate(
+      { email },
+      { $set: { isVerified: true, otp: undefined, otpExpires: undefined } }
+    );
+
     console.log("✅ Patient Verified Successfully:", email);
 
     res.status(200).json({
@@ -196,8 +216,12 @@ export const loginPatient = async (req, res) => {
       return res.status(400).json({ success: false, message: "Invalid credentials" });
     }
 
+    const user = await User.findOne({ email: patient.email });
+    const tokenId = user?._id || patient._id;
+    const permissions = getPermissionsForRole(patient.role);
+
     const token = jwt.sign(
-      { id: patient._id, role: patient.role },
+      { id: tokenId, role: patient.role, permissions },
       process.env.JWT_SECRET,
       { expiresIn: "7d" }
     );
@@ -207,10 +231,11 @@ export const loginPatient = async (req, res) => {
       message: "Login successful",
       token,
       patient: {
-        id: patient._id,
+        id: tokenId,
         name: patient.name,
         email: patient.email,
-        role: patient.role
+        role: patient.role,
+        permissions,
       }
     });
 
@@ -219,12 +244,69 @@ export const loginPatient = async (req, res) => {
   }
 };
 
-// Forgot Password & Reset Password (Optional for now)
+// Forgot Password
 export const forgotPasswordPatient = async (req, res) => {
-  // You can copy from doctor if needed
-  res.status(200).json({ message: "Forgot password for patient - coming soon" });
+  try {
+    const { email } = req.body;
+
+    const patient = await PatAuth.findOne({ email });
+    if (!patient) {
+      return res.status(404).json({ success: false, message: "Patient with this email not found" });
+    }
+
+    const resetToken = jwt.sign(
+      { id: patient._id },
+      process.env.JWT_SECRET,
+      { expiresIn: "15m" }
+    );
+
+    patient.resetPasswordToken = resetToken;
+    patient.resetPasswordExpire = Date.now() + 15 * 60 * 1000;
+    await patient.save();
+
+    const resetUrl = `http://localhost:3000/reset-password/${resetToken}`;
+    console.log(`Password reset link for Patient: ${resetUrl}`);
+
+    res.status(200).json({
+      success: true,
+      message: "Password reset link sent to your email",
+      resetToken,
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
 };
 
 export const resetPasswordPatient = async (req, res) => {
-  res.status(200).json({ message: "Reset password for patient - coming soon" });
+  try {
+    const { token, newPassword } = req.body;
+
+    if (!token || !newPassword) {
+      return res.status(400).json({ success: false, message: "Token and new password are required" });
+    }
+
+    const patient = await PatAuth.findOne({
+      resetPasswordToken: token,
+      resetPasswordExpire: { $gt: Date.now() },
+    });
+
+    if (!patient) {
+      return res.status(400).json({ success: false, message: "Invalid or expired token" });
+    }
+
+    const salt = await bcrypt.genSalt(10);
+    patient.password = await bcrypt.hash(newPassword, salt);
+    patient.resetPasswordToken = undefined;
+    patient.resetPasswordExpire = undefined;
+    await patient.save();
+
+    await User.updateOne({ email: patient.email }, { $set: { password: patient.password } });
+
+    res.status(200).json({
+      success: true,
+      message: "Password reset successful. You can now login.",
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
 };
