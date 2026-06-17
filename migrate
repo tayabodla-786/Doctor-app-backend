@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Run migrations: ./migrate  OR  npm run migrate
+# Do NOT use: npx run migrate
+set -e
+cd "$(dirname "$0")"
+node scripts/init-env.js
+node scripts/migrate.js "${1:-up}"
