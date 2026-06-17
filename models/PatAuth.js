@@ -18,7 +18,18 @@ const PatAuthSchema = new mongoose.Schema({
     role: {
         type: String,   
         default: "Patient",
-    }}, { timestamps: true });
+    },
+
+    resetPasswordToken: String,
+    resetPasswordExpire: Date,
+
+    otp: String,
+    otpExpires: Date,
+    isVerified: {
+        type: Boolean,
+        default: false
+    }
+}, { timestamps: true });
 
 const PatAuth = mongoose.model("PatAuth", PatAuthSchema);  
 

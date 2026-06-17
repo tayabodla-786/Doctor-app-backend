@@ -1,0 +1,238 @@
+import DocAuth from "../models/DocAuth.js";
+import bcrypt from "bcrypt";
+import jwt from "jsonwebtoken";
+import nodemailer from "nodemailer";
+import { normalizeSpecialty } from "../utils/specialties.js";
+
+
+
+
+// ====================== SEND OTP EMAIL ======================
+const sendOTPEmail = async (email, otp) => {
+  const transporter = nodemailer.createTransport({
+    service: 'gmail',
+    auth: {
+      user: process.env.EMAIL_USER,
+      pass: process.env.EMAIL_PASS
+    }
+  });
+
+  await transporter.sendMail({
+    from: `"Doctor Patient App" <${process.env.EMAIL_USER}>`,
+    to: email,
+    subject: "Verification OTP - Doctor Patient App",
+    html: `
+      <h2>Welcome to Doctor Patient App</h2>
+      <p>Your verification code is:</p>
+      <h1 style="color: #00BFA5; letter-spacing: 4px;">${otp}</h1>
+      <p>This code will expire in <strong>10 minutes</strong>.</p>
+      <p>If you didn't request this, please ignore this email.</p>
+    `
+  });
+};
+
+// ====================== REGISTER DOCTOR (Send OTP) ======================
+export const registerDoctor = async (req, res) => {
+  try {
+    const { name, email, password, confirmPassword, specialty } = req.body;
+
+    if (!name || !email || !password || !confirmPassword || !specialty) {
+      return res.status(400).json({ success: false, message: "All fields including specialty are required" });
+    }
+
+    if (password !== confirmPassword) {
+      return res.status(400).json({ success: false, message: "Passwords do not match" });
+    }
+
+    const normalizedSpecialty = normalizeSpecialty(specialty);
+    if (!normalizedSpecialty) {
+      return res.status(400).json({ success: false, message: "Invalid specialty" });
+    }
+
+    // Check if user already exists
+    const existingDoctor = await DocAuth.findOne({ email });
+    if (existingDoctor) {
+      return res.status(400).json({ success: false, message: "Doctor with this email already exists" });
+    }
+
+    // Generate 6-digit OTP
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+
+    // Hash password
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password, salt);
+
+    // Create doctor with OTP (not verified yet)
+    const newDoctor = new DocAuth({
+      name,
+      email,
+      password: hashedPassword,
+      role: "Doctor",
+      specialty: normalizedSpecialty,
+      otp,
+      otpExpires: Date.now() + 10 * 60 * 1000, // 10 minutes
+      isVerified: false
+    });
+
+    await newDoctor.save();
+
+    // Send OTP to email
+    await sendOTPEmail(email, otp);
+
+    res.status(200).json({
+      success: true,
+      message: "OTP sent to your email. Please verify to complete registration.",
+      email: email
+    });
+
+  } catch (error) {
+    res.status(500).json({ success: false, message: "Server error", error: error.message });
+  }
+};
+
+// ====================== VERIFY OTP ======================
+export const verifyDoctorOTP = async (req, res) => {
+  try {
+    const { email, otp } = req.body;
+
+    if (!email || !otp) {
+      return res.status(400).json({ success: false, message: "Email and OTP are required" });
+    }
+
+    const doctor = await DocAuth.findOne({ email });
+
+    if (!doctor) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    if (doctor.isVerified) {
+      return res.status(400).json({ success: false, message: "Account already verified" });
+    }
+
+    if (doctor.otp !== otp || doctor.otpExpires < Date.now()) {
+      return res.status(400).json({ success: false, message: "Invalid or expired OTP" });
+    }
+
+    // Verify the account
+    doctor.isVerified = true;
+    doctor.otp = undefined;
+    doctor.otpExpires = undefined;
+    await doctor.save();
+
+    res.status(200).json({
+      success: true,
+      message: "Account verified successfully! You can now login."
+    });
+
+  } catch (error) {
+    res.status(500).json({ success: false, message: "Server error", error: error.message });
+  }
+};
+
+// ====================== LOGIN DOCTOR ======================
+export const loginDoctor = async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    const doctor = await DocAuth.findOne({ email });
+    if (!doctor) {
+      return res.status(400).json({ success: false, message: "Invalid credentials" });
+    }
+
+    if (!doctor.isVerified) {
+      return res.status(400).json({ success: false, message: "Please verify your email first" });
+    }
+
+    const isMatch = await bcrypt.compare(password, doctor.password);
+    if (!isMatch) {
+      return res.status(400).json({ success: false, message: "Invalid credentials" });
+    }
+
+    // Generate JWT Token
+    const token = jwt.sign(
+      { id: doctor._id, role: doctor.role },
+      process.env.JWT_SECRET,
+      { expiresIn: "7d" }
+    );
+
+    res.status(200).json({
+      success: true,
+      message: "Login successful",
+      token,
+      doctor: {
+        id: doctor._id,
+        name: doctor.name,
+        email: doctor.email,
+        role: doctor.role,
+        specialty: doctor.specialty
+      }
+    });
+
+  } catch (error) {
+    res.status(500).json({ success: false, message: "Server error", error: error.message });
+  }
+};
+
+// Forgot Password 
+export const forgotPasswordDoctor = async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    const doctor = await DocAuth.findOne({ email });
+    if (!doctor) {
+      return res.status(404).json({ message: "Doctor with this email not found" });
+    }
+
+    const resetToken = jwt.sign(
+      { id: doctor._id },
+      process.env.JWT_SECRET,
+      { expiresIn: "15m" }
+    );
+
+    doctor.resetPasswordToken = resetToken;
+    doctor.resetPasswordExpire = Date.now() + 15 * 60 * 1000;
+    await doctor.save();
+
+    const resetUrl = `http://localhost:3000/reset-password/${resetToken}`;
+    console.log(`Password reset link for Doctor: ${resetUrl}`);
+
+    res.status(200).json({
+      success: true,
+      message: "Password reset link sent to your email"
+    });
+
+  } catch (error) {
+    res.status(500).json({ message: "Server error", error: error.message });
+  }
+};
+// Reset Password
+export const resetPasswordDoctor = async (req, res) => {
+  try {
+    const { token, newPassword } = req.body;
+
+    const doctor = await DocAuth.findOne({
+      resetPasswordToken: token,
+      resetPasswordExpire: { $gt: Date.now() }
+    });
+
+    if (!doctor) {
+      return res.status(400).json({ message: "Invalid or expired token" });
+    }
+
+    const salt = await bcrypt.genSalt(10);
+    doctor.password = await bcrypt.hash(newPassword, salt);
+
+    doctor.resetPasswordToken = undefined;
+    doctor.resetPasswordExpire = undefined;
+
+    await doctor.save();
+
+    res.status(200).json({
+      success: true,
+      message: "Password reset successful. You can now login."
+    });
+
+  } catch (error) {
+    res.status(500).json({ message: "Server error", error: error.message });
+  }
+};
