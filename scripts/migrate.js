@@ -1,7 +1,7 @@
 import mongoose from "mongoose";
 import { readdir } from "fs/promises";
 import path from "path";
-import { fileURLToPath } from "url";
+import { fileURLToPath, pathToFileURL } from "url";
 import { getMongoUri } from "../config/env.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -22,7 +22,7 @@ const loadMigrations = async () => {
 
   const migrations = [];
   for (const file of files) {
-    const mod = await import(path.join(migrationsDir, file));
+    const mod = await import(pathToFileURL(path.join(migrationsDir, file)).href);
     migrations.push({
       name: mod.name || file.replace(".js", ""),
       up: mod.up,

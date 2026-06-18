@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
+import os from 'os';
 import { dbConnect } from './config/dbConnection.js';
 
 import docRoutes from './routes/docRoutes.js';
@@ -59,10 +60,29 @@ app.use((err, req, res, next) => {
 
 const PORT = process.env.PORT || 3000;
 
+function getLocalIp() {
+  const nets = os.networkInterfaces();
+  for (const interfaces of Object.values(nets)) {
+    for (const net of interfaces || []) {
+      if (net.family === 'IPv4' && !net.internal) {
+        return net.address;
+      }
+    }
+  }
+  return null;
+}
+
 dbConnect()
   .then(() => {
-    const server = app.listen(PORT, () => {
+    const server = app.listen(PORT, '0.0.0.0', () => {
+      const lanIp = getLocalIp();
       console.log(`Server running on http://localhost:${PORT}`);
+      if (lanIp) {
+        console.log(`Phone/LAN access: http://${lanIp}:${PORT}`);
+        console.log(
+          `Flutter (physical device): flutter run --dart-define=API_BASE_URL=http://${lanIp}:${PORT}`,
+        );
+      }
     });
     initSocket(server);
   })

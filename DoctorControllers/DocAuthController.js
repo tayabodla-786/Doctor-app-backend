@@ -12,11 +12,20 @@ import { getPermissionsForRole } from "../constants/roles.js";
 
 // ====================== SEND OTP EMAIL ======================
 const sendOTPEmail = async (email, otp) => {
+  if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
+    throw new Error('EMAIL_USER and EMAIL_PASS are required in .env to send OTP emails');
+  }
+
   const transporter = nodemailer.createTransport({
-    service: 'gmail',
+    host: process.env.EMAIL_HOST || 'smtp.gmail.com',
+    port: Number(process.env.EMAIL_PORT) || 587,
+    secure: process.env.EMAIL_SECURE === 'true',
     auth: {
       user: process.env.EMAIL_USER,
       pass: process.env.EMAIL_PASS
+    },
+    tls: {
+      rejectUnauthorized: false
     }
   });
 
@@ -93,13 +102,37 @@ export const registerDoctor = async (req, res) => {
     });
 
     // Send OTP to email
-    await sendOTPEmail(email, otp);
+    try {
+      await sendOTPEmail(email, otp);
+    } catch (mailError) {
+      console.error('Doctor OTP email failed:', mailError.message);
+      if (process.env.SHOW_OTP === 'true' || process.env.NODE_ENV !== 'production') {
+        return res.status(200).json({
+          success: true,
+          message: 'OTP generated (email not sent). Use OTP below in development.',
+          email,
+          otp,
+        });
+      }
+      await DocAuth.deleteOne({ email });
+      await User.deleteOne({ email });
+      return res.status(500).json({
+        success: false,
+        message: 'Could not send OTP email. Check EMAIL_USER and EMAIL_PASS in .env',
+      });
+    }
 
-    res.status(200).json({
+    const payload = {
       success: true,
-      message: "OTP sent to your email. Please verify to complete registration.",
-      email: email
-    });
+      message: 'OTP sent to your email. Please verify to complete registration.',
+      email,
+    };
+
+    if (process.env.SHOW_OTP === 'true' || process.env.NODE_ENV !== 'production') {
+      payload.otp = otp;
+    }
+
+    res.status(200).json(payload);
 
   } catch (error) {
     res.status(500).json({ success: false, message: "Server error", error: error.message });
@@ -110,12 +143,14 @@ export const registerDoctor = async (req, res) => {
 export const verifyDoctorOTP = async (req, res) => {
   try {
     const { email, otp } = req.body;
+    const emailValue = email?.toString().trim().toLowerCase();
+    const otpValue = otp !== undefined && otp !== null ? String(otp).trim() : '';
 
-    if (!email || !otp) {
+    if (!emailValue || !otpValue) {
       return res.status(400).json({ success: false, message: "Email and OTP are required" });
     }
 
-    const doctor = await DocAuth.findOne({ email });
+    const doctor = await DocAuth.findOne({ email: emailValue });
 
     if (!doctor) {
       return res.status(404).json({ success: false, message: "User not found" });
@@ -125,7 +160,7 @@ export const verifyDoctorOTP = async (req, res) => {
       return res.status(400).json({ success: false, message: "Account already verified" });
     }
 
-    if (doctor.otp !== otp || doctor.otpExpires < Date.now()) {
+    if (String(doctor.otp) !== otpValue || doctor.otpExpires < Date.now()) {
       return res.status(400).json({ success: false, message: "Invalid or expired OTP" });
     }
 
