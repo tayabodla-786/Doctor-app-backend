@@ -1,16 +1,20 @@
 import Message from "../models/Message.js";
 import Group from "../models/Group.js";
 import User from "../models/User.js";
+import { collectUserIds } from "../utils/communicationHelpers.js";
 
 export const getMessages = async (req, res) => {
   try {
     const userId = req.user.id;
     const { otherUserId } = req.params;
 
+    const myIds = await collectUserIds(userId);
+    const otherIds = await collectUserIds(otherUserId);
+
     const messages = await Message.find({
       $or: [
-        { sender: userId, receiver: otherUserId },
-        { sender: otherUserId, receiver: userId },
+        { sender: { $in: myIds }, receiver: { $in: otherIds } },
+        { sender: { $in: otherIds }, receiver: { $in: myIds } },
       ],
     }).sort({ createdAt: 1 });
 
@@ -69,13 +73,16 @@ export const getConversations = async (req, res) => {
         read: false,
       });
 
-      const otherUser = await User.findById(otherUserId).select("name role").lean();
+      const otherUser = await User.findById(otherUserId)
+        .select("name role profileImage")
+        .lean();
 
       conversationMap.set(otherUserId, {
         id: [userId, otherUserId].sort().join("_"),
         otherUserId,
         otherUserName: otherUser?.name || "User",
         otherUserRole: otherUser?.role || "",
+        otherUserImage: otherUser?.profileImage || null,
         lastMessage: msg.message === "[voice_message]" ? "Voice message" : msg.message,
         time: msg.createdAt,
         unreadCount,
@@ -112,7 +119,7 @@ export const getContacts = async (req, res) => {
       role: targetRole,
       isVerified: true,
     })
-      .select("name email role specialty phone")
+      .select("name email role specialty phone profileImage")
       .sort({ name: 1 })
       .lean();
 
@@ -125,6 +132,8 @@ export const getContacts = async (req, res) => {
         role: u.role,
         specialty: u.specialty || null,
         phone: u.phone || null,
+        profileImage: u.profileImage || null,
+        image: u.profileImage || null,
       })),
     });
   } catch (error) {

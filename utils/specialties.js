@@ -43,7 +43,9 @@ export const normalizeSpecialty = (input) => {
   const aliasMatch = Object.entries(SPECIALTY_ALIASES).find(
     ([alias]) => alias.toLowerCase() === decoded.toLowerCase()
   );
-  return aliasMatch ? aliasMatch[1] : null;
+  if (aliasMatch) return aliasMatch[1];
+
+  return decoded;
 };
 
 export const getSpecialtySearchValues = (specialty) => {

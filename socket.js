@@ -4,15 +4,22 @@ import Message from "./models/Message.js";
 import Call from "./models/Call.js";
 import User from "./models/User.js";
 import { buildAgoraToken } from "./utils/agoraToken.js";
-import { canContact } from "./utils/communicationHelpers.js";
+import { canContact, collectUserIds, resolveUserById, validateReceiver } from "./utils/communicationHelpers.js";
 
 let io;
 
 const getPrivateRoom = (userId, otherUserId) => [userId, otherUserId].sort().join("_");
 
-export const emitToUser = (userId, event, payload) => {
+const broadcastToUser = async (userId, event, payload) => {
   if (!io || !userId) return;
-  io.to(`user_${userId}`).emit(event, payload);
+  const ids = await collectUserIds(userId);
+  for (const id of ids) {
+    io.to(`user_${id}`).emit(event, payload);
+  }
+};
+
+export const emitToUser = (userId, event, payload) => {
+  void broadcastToUser(userId, event, payload);
 };
 
 export const emitMessage = (message) => {
@@ -29,13 +36,30 @@ export const emitMessage = (message) => {
   }
 
   if (receiver) {
-    const room = getPrivateRoom(sender, receiver);
-    io.to(room).emit("receiveMessage", payload);
-    emitToUser(receiver, "receiveMessage", payload);
+    void (async () => {
+      const senderIds = sender ? await collectUserIds(sender) : [];
+      const receiverIds = await collectUserIds(receiver);
+
+      const rooms = new Set();
+      for (const s of senderIds) {
+        for (const r of receiverIds) {
+          rooms.add(getPrivateRoom(s, r));
+        }
+      }
+      for (const room of rooms) {
+        io.to(room).emit("receiveMessage", payload);
+      }
+
+      await broadcastToUser(receiver, "receiveMessage", payload);
+      if (sender) {
+        await broadcastToUser(sender, "receiveMessage", payload);
+      }
+    })();
+    return;
   }
 
   if (sender) {
-    emitToUser(sender, "receiveMessage", payload);
+    broadcastToUser(sender, "receiveMessage", payload);
   }
 };
 
@@ -66,6 +90,12 @@ export const initSocket = (server) => {
 
     socket.join(`user_${userId}`);
 
+    void collectUserIds(userId).then((ids) => {
+      for (const id of ids) {
+        socket.join(`user_${id}`);
+      }
+    });
+
     socket.on("joinRoom", ({ otherUserId }) => {
       if (!otherUserId) return;
       socket.join(getPrivateRoom(userId, otherUserId));
@@ -84,19 +114,33 @@ export const initSocket = (server) => {
           return;
         }
 
+        let resolvedSenderId = userId;
+        let resolvedReceiverId = receiverId;
+
         if (!groupId && !isAI) {
-          const receiver = await User.findById(receiverId).select("role");
-          if (!receiver || !canContact(socket.userRole, receiver.role)) {
+          const sender = await resolveUserById(userId);
+          const receiver = await resolveUserById(receiverId);
+
+          if (!sender || !receiver) {
+            callback?.({ success: false, message: "User not found" });
+            return;
+          }
+
+          const senderRole = socket.userRole || sender.role;
+          if (!canContact(senderRole, receiver.role)) {
             callback?.({ success: false, message: "Cannot message this user" });
             return;
           }
+
+          resolvedSenderId = sender.canonicalId;
+          resolvedReceiverId = receiver.canonicalId;
         }
 
         const isGroup = Boolean(groupId);
         const newMessage = await Message.create({
-          sender: userId,
+          sender: resolvedSenderId,
           senderModel: isAI ? "AI" : "User",
-          receiver: isGroup ? null : receiverId,
+          receiver: isGroup ? null : resolvedReceiverId,
           receiverModel: isGroup ? null : "User",
           groupId: groupId || null,
           chatType: isAI ? "ai" : isGroup ? "group" : "private",

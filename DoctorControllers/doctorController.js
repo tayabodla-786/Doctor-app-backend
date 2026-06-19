@@ -1,5 +1,6 @@
 import User from "../models/User.js";
 import DocProfile from "../models/DocProfile.js";
+import Appointment from "../models/Appointment.js";
 import {
   normalizeSpecialty,
   VALID_SPECIALTIES,
@@ -16,8 +17,50 @@ const formatDoctor = (user, profile) => ({
   hospitalName: profile?.hospitalName || null,
   address: profile?.address || null,
   licenseId: profile?.licenseId || null,
+  profileImage: user.profileImage || null,
+  imagepath: user.profileImage || null,
   hasProfile: Boolean(profile),
 });
+
+const formatDoctorDetail = (user, profile, reviews = []) => {
+  const base = formatDoctor(user, profile);
+  const specialty = base.specialty || "Specialist";
+  const experience = base.experience ? `${base.experience} years` : "";
+  const hospital = base.hospitalName || "Clinic";
+
+  let about = `Dr. ${base.name} is a board-certified ${specialty} specialist.`;
+  if (profile) {
+    about = [
+      `${base.degree || specialty} specialist`,
+      experience ? `with ${experience} of experience` : null,
+      hospital ? `at ${hospital}` : null,
+      base.address ? `(${base.address})` : null,
+    ]
+      .filter(Boolean)
+      .join(" ");
+  }
+
+  const education = profile
+    ? [
+        {
+          degree: base.degree || specialty,
+          hospital: hospital,
+          experience: base.experience || "",
+          year: base.experience ? `${base.experience} yrs` : "",
+          school: `${base.degree || specialty} — ${hospital}`,
+        },
+      ]
+    : [];
+
+  return {
+    ...base,
+    about,
+    education,
+    reviews,
+    fee: 50,
+    consultationFee: 50,
+  };
+};
 
 export const getDoctorsBySpecialty = async (req, res) => {
   try {
@@ -44,7 +87,7 @@ export const getDoctorsBySpecialty = async (req, res) => {
         _id: profile.user,
         role: "Doctor",
         isVerified: true,
-      }).select("name email specialty");
+      }).select("name email specialty profileImage");
 
       if (!user) continue;
 
@@ -59,7 +102,7 @@ export const getDoctorsBySpecialty = async (req, res) => {
       role: "Doctor",
       isVerified: true,
       specialty: { $in: specialtyValues },
-    }).select("name email specialty");
+    }).select("name email specialty profileImage");
 
     for (const user of users) {
       const doctorId = user._id.toString();
@@ -103,7 +146,7 @@ const collectVerifiedDoctors = async () => {
       _id: profile.user,
       role: "Doctor",
       isVerified: true,
-    }).select("name email specialty");
+    }).select("name email specialty profileImage");
 
     if (!user) continue;
 
@@ -117,7 +160,7 @@ const collectVerifiedDoctors = async () => {
   const users = await User.find({
     role: "Doctor",
     isVerified: true,
-  }).select("name email specialty");
+  }).select("name email specialty profileImage");
 
   for (const user of users) {
     const doctorId = user._id.toString();
@@ -152,16 +195,33 @@ export const getDoctorById = async (req, res) => {
       _id: doctorId,
       role: "Doctor",
       isVerified: true,
-    }).select("name email specialty");
+    }).select("name email specialty profileImage");
 
     if (!user) {
       return res.status(404).json({ success: false, message: "Doctor not found" });
     }
 
     const profile = await DocProfile.findOne({ user: user._id });
+
+    const completed = await Appointment.find({
+      doctor: user._id,
+      status: { $in: ["Completed", "Confirmed"] },
+    })
+      .populate("patient", "name")
+      .sort({ updatedAt: -1 })
+      .limit(10)
+      .lean();
+
+    const reviews = completed.map((item) => ({
+      patientName: item.patient?.name || "Patient",
+      comment: item.reason || "Great consultation experience.",
+      rating: 5,
+      date: item.updatedAt,
+    }));
+
     res.status(200).json({
       success: true,
-      doctor: formatDoctor(user, profile),
+      doctor: formatDoctorDetail(user, profile, reviews),
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });

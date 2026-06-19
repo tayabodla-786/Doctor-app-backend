@@ -1,6 +1,68 @@
 import mongoose from "mongoose";
 import Appointment from "../models/Appointment.js";
 import Availability from "../models/Availability.js";
+import {
+  buildAppointmentPayload,
+  releaseAppointmentSlot,
+} from "../utils/appointmentHelpers.js";
+import { emitToUser } from "../socket.js";
+import {
+  getDayRangeFromKey,
+  normalizeTime,
+  timesMatch,
+} from "../utils/dateHelpers.js";
+
+const notifyAppointmentParties = (appointmentDoc) => {
+  const payload = buildAppointmentPayload(appointmentDoc);
+  const slot = payload.slotLabel || payload.startTime || "";
+  const when = payload.date ? `${payload.date} • ${slot}` : slot;
+
+  if (payload.doctorId) {
+    let title = "Appointment update";
+    let description = when;
+
+    if (payload.status === "Pending") {
+      title = "New appointment request";
+      description = `${payload.patientName} requested ${when}`;
+    } else if (payload.status === "Confirmed") {
+      title = "Appointment confirmed";
+      description = `You confirmed ${payload.patientName} for ${when}`;
+    } else if (payload.status === "Cancelled") {
+      title = "Appointment declined";
+      description = `You declined ${payload.patientName}'s request for ${when}`;
+    }
+
+    emitToUser(payload.doctorId, "appointment:update", {
+      ...payload,
+      title,
+      description,
+      is_read: false,
+    });
+  }
+
+  if (payload.patientId) {
+    let title = "Appointment update";
+    let description = when;
+
+    if (payload.status === "Pending") {
+      title = "Request sent";
+      description = `Waiting for Dr. ${payload.doctorName} to accept ${when}`;
+    } else if (payload.status === "Confirmed") {
+      title = "Appointment confirmed";
+      description = `Dr. ${payload.doctorName} confirmed your slot: ${when}`;
+    } else if (payload.status === "Cancelled") {
+      title = "Appointment declined";
+      description = `Dr. ${payload.doctorName} declined your request for ${when}`;
+    }
+
+    emitToUser(payload.patientId, "appointment:update", {
+      ...payload,
+      title,
+      description,
+      is_read: false,
+    });
+  }
+};
 
 // Patient books an appointment
 export const bookAppointment = async (req, res) => {
@@ -23,36 +85,48 @@ export const bookAppointment = async (req, res) => {
     const doctorObjId = new mongoose.Types.ObjectId(doctorId);
     const patientObjId = new mongoose.Types.ObjectId(patientId);
 
-    // Check if slot is still available (use date range to handle timezone issues)
-    const dateObj = new Date(date);
-    const startOfDay = new Date(dateObj.getFullYear(), dateObj.getMonth(), dateObj.getDate());
-    const endOfDay = new Date(startOfDay.getTime() + 24 * 60 * 60 * 1000);
+    const dayRange = getDayRangeFromKey(date);
+    if (!dayRange) {
+      return res.status(400).json({ success: false, message: "Invalid date" });
+    }
 
-    const availability = await Availability.findOne({ 
-      doctor: doctorObjId, 
-      date: { $gte: startOfDay, $lt: endOfDay }
+    const normalizedStart = normalizeTime(startTime);
+    const normalizedEnd = normalizeTime(endTime || startTime);
+
+    const availability = await Availability.findOne({
+      doctor: doctorObjId,
+      date: { $gte: dayRange.start, $lt: dayRange.end },
     });
 
     if (!availability) {
-      return res.status(400).json({ success: false, message: "No availability found for this date" });
+      return res.status(400).json({
+        success: false,
+        message: "No availability found for this date",
+      });
     }
 
-    const slot = availability.slots.find(s => 
-      s.startTime === startTime && s.endTime === endTime && !s.isBooked
+    const slot = availability.slots.find(
+      (s) =>
+        timesMatch(s.startTime, normalizedStart) &&
+        timesMatch(s.endTime, normalizedEnd) &&
+        !s.isBooked
     );
 
     if (!slot) {
-      return res.status(400).json({ success: false, message: "This slot is no longer available" });
+      return res.status(400).json({
+        success: false,
+        message: "This slot is no longer available",
+      });
     }
 
     // Create Appointment
     const appointment = await Appointment.create({
       doctor: doctorObjId,
       patient: patientObjId,
-      date: new Date(date),
-      startTime,
-      endTime,
-      reason: reason || "General Consultation"
+      date: dayRange.start,
+      startTime: normalizedStart,
+      endTime: normalizedEnd,
+      reason: reason || "General Consultation",
     });
 
     // Mark slot as booked
@@ -60,10 +134,16 @@ export const bookAppointment = async (req, res) => {
     slot.bookedBy = patientObjId;
     await availability.save();
 
+    const populated = await Appointment.findById(appointment._id)
+      .populate("doctor", "name specialty hospitalName profileImage")
+      .populate("patient", "name email phone profileImage");
+
+    notifyAppointmentParties(populated);
+
     res.status(201).json({
       success: true,
-      message: "Appointment booked successfully",
-      appointment
+      message: "Appointment request sent to doctor",
+      appointment: populated,
     });
 
   } catch (error) {
@@ -78,7 +158,7 @@ export const getPatientAppointments = async (req, res) => {
     const patientId = req.user.id;
 
     const appointments = await Appointment.find({ patient: patientId })
-      .populate("doctor", "name specialty hospitalName")
+      .populate("doctor", "name specialty hospitalName profileImage")
       .sort({ date: -1 });
 
     res.json({ success: true, appointments });
@@ -93,7 +173,7 @@ export const getDoctorAppointments = async (req, res) => {
     const doctorId = req.user.id;
 
     const appointments = await Appointment.find({ doctor: doctorId })
-      .populate("patient", "name email")
+      .populate("patient", "name email profileImage")
       .sort({ date: -1 });
 
     res.json({ success: true, appointments });
@@ -111,7 +191,7 @@ export const getDoctorRequests = async (req, res) => {
       doctor: doctorId, 
       status: "Pending" 
     })
-      .populate("patient", "name email phone")
+      .populate("patient", "name email phone profileImage")
       .sort({ createdAt: -1 });
 
     res.json({ success: true, requests });
@@ -146,7 +226,13 @@ export const acceptAppointmentRequest = async (req, res) => {
     appointment.status = "Confirmed";
     await appointment.save();
 
-    res.json({ success: true, message: "Appointment accepted", appointment });
+    const populated = await Appointment.findById(appointment._id)
+      .populate("doctor", "name specialty hospitalName profileImage")
+      .populate("patient", "name email phone profileImage");
+
+    notifyAppointmentParties(populated);
+
+    res.json({ success: true, message: "Appointment accepted", appointment: populated });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -178,7 +264,20 @@ export const rejectAppointmentRequest = async (req, res) => {
     appointment.status = "Cancelled";
     await appointment.save();
 
-    res.json({ success: true, message: "Appointment rejected", appointment });
+    await releaseAppointmentSlot(
+      appointment.doctor,
+      appointment.date,
+      appointment.startTime,
+      appointment.endTime
+    );
+
+    const populated = await Appointment.findById(appointment._id)
+      .populate("doctor", "name specialty hospitalName profileImage")
+      .populate("patient", "name email phone profileImage");
+
+    notifyAppointmentParties(populated);
+
+    res.json({ success: true, message: "Appointment rejected", appointment: populated });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -196,7 +295,7 @@ export const getDoctorUpcomingAppointments = async (req, res) => {
       status: "Confirmed",
       date: { $gte: startOfDay }
     })
-      .populate("patient", "name email phone")
+      .populate("patient", "name email phone profileImage")
       .sort({ date: 1, startTime: 1 });
 
     // filter only truly future appointments (combine date + startTime)
@@ -227,7 +326,7 @@ export const getPatientUpcomingAppointments = async (req, res) => {
       status: "Confirmed",
       date: { $gte: startOfDay }
     })
-      .populate("doctor", "name specialty hospitalName email")
+      .populate("doctor", "name specialty hospitalName email profileImage")
       .sort({ date: 1, startTime: 1 });
 
     const futureAppointments = appointmentsAll.filter(a => {
@@ -281,7 +380,7 @@ export const getDoctorFinishedAppointments = async (req, res) => {
     const now = new Date();
 
     const appointmentsAll = await Appointment.find({ doctor: doctorId, status: { $in: ["Confirmed", "Completed"] } })
-      .populate("patient", "name email phone")
+      .populate("patient", "name email phone profileImage")
       .sort({ date: -1 });
 
     // include appointments explicitly Completed OR confirmed appointments whose end datetime is in the past
@@ -306,7 +405,7 @@ export const getPatientFinishedAppointments = async (req, res) => {
     const now = new Date();
 
     const appointmentsAll = await Appointment.find({ patient: patientId, status: { $in: ["Confirmed", "Completed"] } })
-      .populate("doctor", "name specialty hospitalName email")
+      .populate("doctor", "name specialty hospitalName email profileImage")
       .sort({ date: -1 });
 
     const finished = appointmentsAll.filter(a => {

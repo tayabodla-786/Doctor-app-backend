@@ -2,9 +2,31 @@ import Message from "../models/Message.js";
 import { emitMessage } from "../socket.js";
 import { validateReceiver } from "../utils/communicationHelpers.js";
 
+const saveAndEmitMessage = async ({
+  senderId,
+  receiverId,
+  message,
+  groupId,
+  isAI,
+}) => {
+  const isGroup = Boolean(groupId);
+  const newMessage = await Message.create({
+    sender: senderId,
+    senderModel: isAI ? "AI" : "User",
+    receiver: isGroup ? null : receiverId,
+    receiverModel: receiverId ? "User" : null,
+    groupId: groupId || null,
+    chatType: isAI ? "ai" : isGroup ? "group" : "private",
+    isAI: Boolean(isAI),
+    message,
+  });
+
+  emitMessage(newMessage);
+  return newMessage;
+};
+
 export const sendMessage = async (req, res) => {
   try {
-    const senderId = req.user.id;
     const { receiverId, message, groupId, isAI } = req.body;
 
     if (!message) {
@@ -18,11 +40,16 @@ export const sendMessage = async (req, res) => {
       });
     }
 
+    let resolvedSenderId = req.user.id;
+    let resolvedReceiverId = receiverId;
+
     if (!groupId && !isAI) {
       const check = await validateReceiver(req.user, receiverId);
       if (!check.ok) {
         return res.status(check.status).json({ success: false, message: check.message });
       }
+      resolvedSenderId = check.senderId;
+      resolvedReceiverId = check.receiverId;
     }
 
     if (isAI && !receiverId) {
@@ -32,18 +59,13 @@ export const sendMessage = async (req, res) => {
       });
     }
 
-    const newMessage = await Message.create({
-      sender: senderId,
-      senderModel: isAI ? "AI" : "User",
-      receiver: receiverId || null,
-      receiverModel: receiverId ? "User" : null,
-      groupId: groupId || null,
-      chatType: isAI ? "ai" : groupId ? "group" : "private",
-      isAI: Boolean(isAI),
+    const newMessage = await saveAndEmitMessage({
+      senderId: resolvedSenderId,
+      receiverId: resolvedReceiverId,
       message,
+      groupId,
+      isAI,
     });
-
-    emitMessage(newMessage);
 
     res.status(201).json({
       success: true,
@@ -99,7 +121,6 @@ export const sendAIMessage = async (req, res) => {
 
 export const sendVoiceMessage = async (req, res) => {
   try {
-    const senderId = req.user.id;
     const { receiverId, groupId } = req.body;
 
     if (!req.file) {
@@ -110,21 +131,26 @@ export const sendVoiceMessage = async (req, res) => {
       return res.status(400).json({ success: false, message: "receiverId is required for private voice messages" });
     }
 
+    let resolvedSenderId = req.user.id;
+    let resolvedReceiverId = receiverId;
+
     if (!groupId) {
       const check = await validateReceiver(req.user, receiverId);
       if (!check.ok) {
         return res.status(check.status).json({ success: false, message: check.message });
       }
+      resolvedSenderId = check.senderId;
+      resolvedReceiverId = check.receiverId;
     }
 
     const fileUrl = `/uploads/${req.file.filename}`;
     const mimeType = req.file.mimetype;
 
     const newMessage = await Message.create({
-      sender: senderId,
+      sender: resolvedSenderId,
       senderModel: "User",
-      receiver: receiverId || null,
-      receiverModel: receiverId ? "User" : null,
+      receiver: resolvedReceiverId,
+      receiverModel: resolvedReceiverId ? "User" : null,
       groupId: groupId || null,
       chatType: groupId ? "group" : "private",
       message: "[voice_message]",

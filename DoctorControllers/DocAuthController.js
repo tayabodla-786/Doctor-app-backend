@@ -205,7 +205,14 @@ export const loginDoctor = async (req, res) => {
     }
 
     const user = await User.findOne({ email: doctor.email });
-    const tokenId = user?._id || doctor._id;
+    if (!user) {
+      return res.status(400).json({
+        success: false,
+        message: "Account sync error. Please contact support.",
+      });
+    }
+
+    const tokenId = user._id;
     const permissions = getPermissionsForRole(doctor.role);
 
     const token = jwt.sign(

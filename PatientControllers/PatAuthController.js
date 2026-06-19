@@ -4,6 +4,7 @@ import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import nodemailer from "nodemailer";
 import { syncUserFromLegacy } from "../utils/userHelpers.js";
+import { ensurePatientProfile } from "./PatProfileController.js";
 import { getPermissionsForRole } from "../constants/roles.js";
 
 // ====================== SEND OTP EMAIL ======================
@@ -52,7 +53,7 @@ const sendOTPEmail = async (email, otp) => {
 // ====================== REGISTER PATIENT (Send OTP) ======================
 export const registerPatient = async (req, res) => {
   try {
-    const { name, email, password, confirmPassword } = req.body;
+    const { name, email, password, confirmPassword, phone } = req.body;
 
     if (!name || !email || !password || !confirmPassword) {
       return res.status(400).json({ success: false, message: "All fields are required" });
@@ -93,6 +94,7 @@ export const registerPatient = async (req, res) => {
       email,
       password: hashedPassword,
       role: "Patient",
+      phone: phone || null,
       otp,
       otpExpires: newPatient.otpExpires,
       isVerified: false,
@@ -184,6 +186,11 @@ export const verifyPatientOTP = async (req, res) => {
       { $set: { isVerified: true, otp: undefined, otpExpires: undefined } }
     );
 
+    const user = await User.findOne({ email });
+    if (user) {
+      await ensurePatientProfile(user);
+    }
+
     console.log("✅ Patient Verified Successfully:", email);
 
     res.status(200).json({
@@ -217,7 +224,16 @@ export const loginPatient = async (req, res) => {
     }
 
     const user = await User.findOne({ email: patient.email });
-    const tokenId = user?._id || patient._id;
+    if (!user) {
+      return res.status(400).json({
+        success: false,
+        message: "Account sync error. Please contact support.",
+      });
+    }
+
+    await ensurePatientProfile(user);
+
+    const tokenId = user._id;
     const permissions = getPermissionsForRole(patient.role);
 
     const token = jwt.sign(

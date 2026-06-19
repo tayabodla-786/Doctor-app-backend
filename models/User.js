@@ -10,6 +10,7 @@ const UserSchema = new mongoose.Schema(
     permissions: { type: [String], default: [] },
     specialty: { type: String, default: null },
     phone: { type: String, default: null },
+    profileImage: { type: String, default: null },
     resetPasswordToken: String,
     resetPasswordExpire: Date,
     otp: String,

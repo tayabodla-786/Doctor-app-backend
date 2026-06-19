@@ -2,7 +2,8 @@
 import express from "express";
 import { 
   setAvailability, 
-  getAvailableSlots 
+  getAvailableSlots,
+  getDoctorSchedule,
 } from "../DoctorControllers/availabilityController.js";
 import { protectDoctor } from "../middleware/authMiddleware.js";
 
@@ -13,5 +14,8 @@ router.post("/set", protectDoctor, setAvailability);
 
 // Get available slots for a specific doctor on a date (Patient side)
 router.get("/slots", getAvailableSlots);
+
+// Get doctor schedule for booking (next N days)
+router.get("/schedule", getDoctorSchedule);
 
 export default router;
